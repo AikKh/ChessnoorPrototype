@@ -1,0 +1,186 @@
+﻿@page "/game/{id:int}"
+@rendermode InteractiveServer
+@inject NavigationManager Navigation
+@implements IAsyncDisposable
+
+@using ChessData;
+@using System.Drawing
+@using Microsoft.AspNetCore.SignalR.Client
+
+<h3>Chess Board</h3>
+<p>Game ID: @Id</p>
+
+<div class="chat-container">
+    <div class="chat-messages">
+        @foreach (var message in _chatMessages)
+        {
+            <div>@message</div>
+        }
+    </div>
+    <div class="chat-input">
+        <input @bind="_input" placeholder="Type your message" />
+        <button @onclick="SendMessage" @onkeypress="Enter" disabled="@(!IsConnected || !IsJoined)">Send</button>
+    </div>
+
+    <div class="chat-input">
+        <button @onclick="Join" disabled="@(IsJoined)">Join</button>
+    </div>
+
+</div>
+
+<div class="chess-board-container">
+    <div class="chess-board" style="max-width: @($"{SizePx}px")">
+        @for (int row = 0; row < Board.Size; row++)
+        {
+            <div class="chess-row">
+                @for (int col = 0; col < Board.Size; col++)
+                {
+                    int currentRow = row;
+                    int currentCol = col;
+
+                    <div class="chess-cell @(IsDarkCell(row, col) ? "dark" : "light") 
+                         @(IsSelected(currentRow, currentCol) ? "selected" : "")"
+                         @onclick="(() => PieceClicked(currentRow, currentCol))">
+
+                        @if (board?[row, col] is Piece piece)
+                        {
+                            <img src="@("/piecessvg/" + piece.ImagePath)" 
+                                 alt="uploaded svg" 
+                                 style="width: 100%; height: 100%;"
+                                 draggable="true" />
+                        }
+
+                    </div>
+                }
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public int SizePx { get; set; } = 600;
+    [Parameter] public int Id { get; set; }
+
+    private HubConnection? hubConnection;
+
+    // Chess
+    private Board board = new();
+    private Dragger dragger = new(new BasicValidator());
+
+    // Chat
+    private readonly List<string> _chatMessages = [];
+    private string _input = string.Empty;
+    private bool _joined = false;
+
+    protected override async Task OnInitializedAsync()
+    {
+        hubConnection = new HubConnectionBuilder()
+            .WithUrl(Navigation.ToAbsoluteUri("/chesshub"))
+            .WithAutomaticReconnect()
+            .Build();
+
+        hubConnection.On<Move>("ReceiveMove", (move) =>
+        {
+            board.ExecuteMove(move);
+            InvokeAsync(StateHasChanged);
+        });
+
+        hubConnection.On<string>("GroupMessage", (message) =>
+        {
+            _chatMessages.Add(message);
+            InvokeAsync(StateHasChanged);
+        });
+
+        // hubConnection.On<Board>("ReceiveState", (state) =>
+        // {
+        //     Console.WriteLine("Got it!");
+        //     board = state;
+        //     InvokeAsync(StateHasChanged);
+        // });
+
+        await hubConnection.StartAsync();
+        await SendState();
+    }
+
+    private async Task PieceClicked(int row, int col)
+    {
+        dragger.AddPosition(board, row, col);
+
+        if (dragger.MoveIsReady(board, out Move move))
+        {
+            board.ExecuteMove(move);
+            await SendMove(move);
+
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task SendMove(Move move)
+    {
+        if (hubConnection is not null)
+        {
+            await hubConnection.SendAsync("SendMove", move, Id);
+        }
+    }
+
+    private async Task Join()
+    {
+        if (hubConnection is not null)
+        {
+            _joined = true;
+            await hubConnection.SendAsync("JoinGroup", Id);
+        }
+    }
+
+    private async Task SendMessage()
+    {
+        if (hubConnection is not null)
+        {
+            await hubConnection.SendAsync("SendGroup", Id, _input);
+        }
+    }
+
+    private async Task SendState()
+    {
+        if (hubConnection is not null)
+        {
+            await hubConnection.SendAsync("SendState", Id);
+        }
+    }
+
+    private bool IsSelected(int row, int col)
+    {
+        if (!dragger.Selected)
+            return false;
+
+        return dragger.SelectedPoint == new Point(row, col);
+    }
+
+    private static bool IsDarkCell(int row, int col)
+    {
+        return (row + col) % 2 == 1;
+    }
+
+    public async Task Enter(KeyboardEventArgs e)
+    {
+        if (e.Code == "Enter")
+        {
+            await SendMessage();
+        }
+    }
+
+    public bool IsConnected =>
+        hubConnection?.State == HubConnectionState.Connected;
+
+    public bool IsJoined => _joined;
+
+    public async ValueTask DisposeAsync()
+    {
+        if (hubConnection is not null)
+        {
+            await hubConnection.DisposeAsync();
+        }
+    }
+}
+
+

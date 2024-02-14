@@ -1,0 +1,39 @@
+﻿@page "/"
+@rendermode InteractiveServer
+@inject NavigationManager Navigation
+@using Microsoft.AspNetCore.SignalR.Client
+
+<a href="/game">
+    <button class="btn btn-primary" @onclick="Create">Create</button>
+</a>
+
+<img src="@("/piecessvg/chess_bdt45.svg")" alt="uploaded svg" /> 
+
+@code {
+    private HubConnection? hubConnection;
+
+    protected override async Task OnInitializedAsync()
+    {
+        hubConnection = new HubConnectionBuilder()
+            .WithUrl(Navigation.ToAbsoluteUri("/chesshub"))
+            .WithAutomaticReconnect()
+            .Build();
+
+        hubConnection.On<uint>("ReceiveId", (id) =>
+        {
+            Navigation.NavigateTo("/game/" + id.ToString());
+            InvokeAsync(StateHasChanged);
+        });
+
+        await hubConnection.StartAsync();
+    }
+
+    private async Task Create()
+    {
+        Console.WriteLine("Creating...");
+        if (hubConnection is not null)
+        {
+            await hubConnection.SendAsync("CreateGame");
+        }
+    }
+}
